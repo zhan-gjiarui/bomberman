@@ -1,0 +1,356 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>彈彈的愛上遊戲系統</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        #score {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <h1>彈彈的愛上遊戲系統</h1>
+    <div id="score">分數: 0</div>
+    <canvas id="gameCanvas" width="650" height="550"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gridSize = 50;
+        const rows = 11;
+        const cols = 13;
+        const scoreDisplay = document.getElementById('score');
+
+        // 載入圖片
+        const playerImage = new Image();
+        playerImage.src = 'image/man.png';
+        const bombImage = new Image();
+        bombImage.src = 'image/bomb.png';
+
+        // 地圖：0=空地，1=牆壁，2=磚塊
+        let map = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,2,0,2,0,2,0,2,0,0,1],
+            [1,0,1,2,1,0,1,0,1,0,1,0,1],
+            [1,2,0,2,0,2,0,2,0,2,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,2,0,2,0,2,0,2,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,2,0,2,0,2,0,2,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,0,0,2,0,2,0,2,0,2,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        let player = { x: 1, y: 1, size: 40 };
+        let enemies = [
+            { x: 11, y: 1, size: 40 },
+            { x: 1, y: 9, size: 40 },
+            { x: 11, y: 9, size: 40 },
+            { x: 9, y: 3, size: 40 },
+            { x: 3, y: 7, size: 40 },
+            { x: 7, y: 5, size: 40 }
+        ];
+        let bombs = [];
+        let flames = [];
+        let score = 0;
+        let gameOver = false;
+
+        // 鍵盤輸入
+        let keys = {};
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'Space' && bombs.length === 0 && !gameOver) {
+                bombs.push({ x: player.x, y: player.y, time: Date.now() });
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+
+        // 繪製地圖
+        function drawMap() {
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    if (map[y][x] === 1) {
+                        ctx.fillStyle = 'gray';
+                        ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
+                    } else if (map[y][x] === 2) {
+                        ctx.fillStyle = 'brown';
+                        ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
+                    } else {
+                        ctx.fillStyle = 'white';
+                        ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
+                    }
+                }
+            }
+        }
+
+        // 繪製玩家
+        function drawPlayer() {
+            if (playerImage.complete) {
+                ctx.drawImage(playerImage, player.x * gridSize + 5, player.y * gridSize + 5, player.size, player.size);
+            } else {
+                ctx.fillStyle = 'blue';
+                ctx.fillRect(player.x * gridSize + 5, player.y * gridSize + 5, player.size, player.size);
+            }
+        }
+
+        // 繪製敵人
+        function drawEnemies() {
+            enemies.forEach(enemy => {
+                ctx.fillStyle = 'red';
+                ctx.fillRect(enemy.x * gridSize + 5, enemy.y * gridSize + 5, enemy.size, enemy.size);
+            });
+        }
+
+        // 繪製炸彈
+        function drawBombs() {
+            bombs.forEach(bomb => {
+                if (bombImage.complete) {
+                    ctx.drawImage(bombImage, bomb.x * gridSize + 5, bomb.y * gridSize + 5, 40, 40);
+                } else {
+                    ctx.fillStyle = 'black';
+                    ctx.beginPath();
+                    ctx.arc(bomb.x * gridSize + gridSize / 2, bomb.y * gridSize + gridSize / 2, 20, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+        }
+
+        // 繪製火焰
+        function drawFlames() {
+            flames.forEach(flame => {
+                ctx.fillStyle = 'red';
+                ctx.fillRect(flame.x * gridSize, flame.y * gridSize, gridSize, gridSize);
+            });
+        }
+
+        // 檢查碰撞
+        function canMove(x, y) {
+            if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
+            return map[y][x] === 0;
+        }
+
+        // 移動玩家
+        function movePlayer() {
+            let newX = player.x;
+            let newY = player.y;
+            if (keys['KeyW'] || keys['ArrowUp']) newY--;
+            if (keys['KeyS'] || keys['ArrowDown']) newY++;
+            if (keys['KeyA'] || keys['ArrowLeft']) newX--;
+            if (keys['KeyD'] || keys['ArrowRight']) newX++;
+            if (canMove(newX, newY)) {
+                player.x = newX;
+                player.y = newY;
+            }
+        }
+
+        // 移動敵人
+        function moveEnemies() {
+            enemies.forEach(enemy => {
+                if (Math.random() < 0.05) {
+                    const directions = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+                    const [dx, dy] = directions[Math.floor(Math.random() * 4)];
+                    const newX = enemy.x + dx;
+                    const newY = enemy.y + dy;
+                    if (canMove(newX, newY)) {
+                        enemy.x = newX;
+                        enemy.y = newY;
+                    }
+                }
+            });
+        }
+
+        // 檢查敵人是否觸碰玩家
+        function checkPlayerCollision() {
+            enemies.forEach(enemy => {
+                if (enemy.x === player.x && enemy.y === player.y) {
+                    gameOver = true;
+                    alert('遊戲結束！你被敵人觸碰！最終分數: ' + score);
+                    resetGame();
+                }
+            });
+        }
+
+        // 處理炸彈和爆炸
+        function handleBombs() {
+            const now = Date.now();
+            bombs = bombs.filter(bomb => {
+                if (now - bomb.time > 3000) {
+                    // 炸彈爆炸
+                    flames.push({ x: bomb.x, y: bomb.y, time: now });
+                    flames.push({ x: bomb.x + 1, y: bomb.y, time: now });
+                    flames.push({ x: bomb.x - 1, y: bomb.y, time: now });
+                    flames.push({ x: bomb.x, y: bomb.y + 1, time: now });
+                    flames.push({ x: bomb.x, y: bomb.y - 1, time: now });
+                    return false;
+                }
+                return true;
+            });
+
+            // 處理火焰
+            flames = flames.filter(flame => now - flame.time < 500);
+            flames.forEach(flame => {
+                if (flame.x >= 0 && flame.x < cols && flame.y >= 0 && flame.y < rows) {
+                    if (map[flame.y][flame.x] === 2) {
+                        map[flame.y][flame.x] = 0; // 摧毀磚塊
+                    }
+                }
+                // 檢查玩家是否被火焰擊中
+                if (flame.x === player.x && flame.y === player.y) {
+                    gameOver = true;
+                    alert('遊戲結束！你被炸死了！最終分數: ' + score);
+                    resetGame();
+                }
+                // 檢查敵人是否被火焰擊中
+                enemies = enemies.filter(enemy => {
+                    if (flame.x === enemy.x && flame.y === enemy.y) {
+                        score += 100;
+                        scoreDisplay.textContent = '分數: ' + score;
+                        return false;
+                    }
+                    return true;
+                });
+            });
+        }
+
+        // 重置遊戲
+        function resetGame() {
+            player = { x: 1, y: 1, size: 40 };
+            enemies = [
+                { x: 11, y: 1, size: 40 },
+                { x: 1, y: 9, size: 40 },
+                { x: 11, y: 9, size: 40 },
+                { x: 9, y: 3, size: 40 },
+                { x: 3, y: 7, size: 40 },
+                { x: 7, y: 5, size: 40 }
+            ];
+            bombs = [];
+            flames = [];
+            score = 0;
+            scoreDisplay.textContent = '分數: ' + score;
+            map = [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,0,0,2,0,2,0,2,0,2,0,0,1],
+                [1,0,1,2,1,0,1,0,1,0,1,0,1],
+                [1,2,0,2,0,2,0,2,0,2,0,2,1],
+                [1,0,1,0,1,0,1,0,1,0,1,0,1],
+                [1,2,0,2,0,2,0,2,0,2,0,2,1],
+                [1,0,1,0,1,0,1,0,1,0,1,0,1],
+                [1,2,0,2,0,2,0,2,0,2,0,2,1],
+                [1,0,1,0,1,0,1,0,1,0,1,0,1],
+                [1,0,0,2,0,2,0,2,0,2,0,0,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ];
+            gameOver = false;
+        }
+
+        // 遊戲主循環
+        function gameLoop() {
+            if (!gameOver) {
+                movePlayer();
+                moveEnemies();
+                handleBombs();
+                checkPlayerCollision(); // 檢查敵人觸碰玩家
+
+                // 檢查勝利條件
+                if (enemies.length === 0) {
+                    gameOver = true;
+                    alert('恭喜你贏了！最終分數: ' + score);
+                    resetGame();
+                }
+
+                // 繪製
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawMap();
+                drawPlayer();
+                drawEnemies();
+                drawBombs();
+                drawFlames();
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 等待圖片載入後開始遊戲
+        let imagesLoaded = 0;
+        const totalImages = 2;
+        function checkImagesLoaded() {
+            imagesLoaded++;
+            if (imagesLoaded === totalImages) {
+                gameLoop();
+            }
+        }
+        playerImage.onload = checkImagesLoaded;
+        bombImage.onload = checkImagesLoaded;
+        playerImage.onerror = () => {
+            console.error('無法載入玩家圖片，請檢查 image/man.png 路徑');
+            checkImagesLoaded();
+        };
+        bombImage.onerror = () => {
+            console.error('無法載入炸彈圖片，請檢查 image/bomb.png 路徑');
+            checkImagesLoaded();
+        };
+    </script>
+</body>
+</html>
